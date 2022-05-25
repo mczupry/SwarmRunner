@@ -1,0 +1,19 @@
+<controllers>
+	<!-- TRANSMITTER -->
+    <automode_controller id="controller"
+                        library="/home/maciej/SwarmRunner/AutoMoDe/build/src/libautomode.so">
+      <actuators>
+        <epuck_wheels implementation="default" noise_std_dev="0.05"/>
+        <epuck_rgb_leds implementation="default" medium="leds"/>
+        <epuck_range_and_bearing implementation="medium" medium="rab" data_size="4" range="0.7"/>
+      </actuators>
+      <sensors>
+        <epuck_proximity implementation="default" show_rays="false" noise_level="0.05" calibrated="true"/>
+        <epuck_range_and_bearing implementation="medium" medium="rab" data_size="4" nois_std_deviation="1.5" loss_probability="0.85" calibrated="true"/>
+        <epuck_light implementation="default" show_rays="false" noise_level="0.05" calibrated="true"/>
+        <epuck_ground implementation="rot_z_only" noise_level="0.05" calibrated="true"/>
+        <epuck_omnidirectional_camera implementation="rot_z_only" medium="leds" show_rays="false"/>
+      </sensors>
+    <params readable='false' history='false' hist-folder='./fsm_history/' fsm-config="--nstates 3 --s0 0 --rwm0 4 --n0 1 --n0x0 1 --c0x0 0 --p0x0 0.56 --s1 1 --n1 1 --n1x0 1 --c1x0 5 --p1x0 0.1 --s2 4 --att2 3.79 --n2 2 --n2x0 0 --c2x0 3 --p2x0 10 --w2x0 12.99 --n2x1 1 --c2x1 0 --p2x1 0.9"/>
+    </automode_controller>
+  </controllers>
