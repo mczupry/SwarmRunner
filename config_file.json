@@ -1,0 +1,32 @@
+{
+	"exe_paths" : {
+		"automode_exe": "automode_main",
+		"irace_exe" : "irace",
+		"argos_exe" : "argos3",
+		"neat_optimization_exe" : "../argos3-NEAT/bin/NEAT-evolution",
+		"neat_exe" : "../argos3-NEAT/bin/NEAT-launch",
+		"data_logger_exe" : "./ArgosLogger/bin/argos_logger"
+	}, 
+	"loop_functions" : {
+		"aac": {
+			"lib": "../AutoMoDe-loopfunctions/build/loop-functions/chocolate/AAC/libchocolate_aac_loopfunc.so",
+			"label":"chocolate_aac_loop_functions"
+		},
+		"cfa": {
+			"lib": "../AutoMoDe-loopfunctions/build/loop-functions/chocolate/CFA/libchocolate_cfa_loopfunc.so",
+			"label": "chocolate_cfa_loop_functions"
+		},
+		"lcn":{
+			"lib": "../AutoMoDe-loopfunctions/build/loop-functions/chocolate/LCN/libchocolate_lcn_loopfunc.so",
+			"label": "chocolate_lcn_loop_functions"
+		},
+		"sca":{
+			"lib": "../AutoMoDe-loopfunctions/build/loop-functions/chocolate/SCA/libchocolate_sca_loopfunc.so",
+			"label": "chocolate_sca_loop_functions"
+		},
+		"spc":{
+			"lib": "../AutoMoDe-loopfunctions/build/loop-functions/chocolate/SPC/libchocolate_spc_loopfunc.so",
+			"label": "chocolate_spc_loop_functions"
+		}
+	}
+}

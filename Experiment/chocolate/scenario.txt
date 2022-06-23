@@ -8,24 +8,22 @@
 ## File that contains the description of the parameters.
 parameterFile = "./new_grammar.txt"
 
-#File that contains the options for parameter dependencies
-dependencyFile = "./depend_config.txt"
 
 ## Directory where the programs will be run.
 execDir = "./execution-folder"
 
 ## Directory where tuning instances are located, either absolute path or
 ## relative to current directory.
-trainInstancesDir = "../experiments/current_experiment"
+trainInstancesDir = "../current_experiment"
 
 #The maximum total budget for the runs of targetRunner
-maxExperiments = 100
+maxExperiments = 200
 
 ## Indicates the number of decimal places to be considered for the
 ## real parameters.
 digits = 2
 
-nbIterations = 1
+nbIterations = 2
 
 ## END of scenario file
 ############################################################################
