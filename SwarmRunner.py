@@ -1,201 +1,163 @@
-import configparser, os, subprocess
+import glob, os
+import xml.etree.ElementTree as ET
+import pickle
+import json
 import re
 from pathlib import Path
-import glob
-import shutil
-from tkinter import N
-import xml.etree.ElementTree as ET
+
+from Runner import BaseRunner, create_runner
+from SRDataParser import SRDataParser
+from utils import execute, show, get_absolute_path
 
 class SwarmRunner:
-    def __init__(self, argos_file_dir:str, entities_per_run = None) -> None:
-        if not os.path.isabs(argos_file_dir):
-            argos_file_dir = f"{os.getcwd()}/{argos_file_dir}"
-        self.entities_per_run = entities_per_run
-        self.argos_file_dir = argos_file_dir
-        self.argos_file = f'{argos_file_dir}/current_experiment/experiment.argos'
-        self.runner_list = []
-        self.results = {}
-    
-    def add_runner(self,description:dict) -> None:
-        self.runner_list.append(create_runner(description, self.argos_file))
-    
-    def run_optimization(self):
-        for runner in self.runner_list:
-            self.build_argos_file(runner.description["wd"], self.entities_per_run)
-            runner.run_optimization(self.argos_file)
-    
-    def benchmark(self, metrics, runs=10):
-        results = {}
-        for i, runner in enumerate(self.runner_list):
-            self.build_argos_file(runner.description["wd"], self.entities_per_run)
-            runner.run_benchmark(metrics, runs)
-            results[i] = runner.get_benchmark_results()
-        return results
-    
-    def build_argos_file(self, wd, entities_nbr = None):
-        experiment_files = glob.glob(f'{self.argos_file_dir}/*.argos') + glob.glob(f'{self.argos_file_dir}/*.xml') 
-        if self.argos_file in experiment_files:
-            experiment_files.remove(self.argos_file)
-        shutil.copyfile(experiment_files[0], self.argos_file)
-        base = ET.parse(self.argos_file)
-        ref = ET.parse(f'{wd}/controllers.xml')
-        root = base.getroot()
-        subroot = ref.getroot()
+    """
+    The SwarmRunner orchestrates the execution of the optimisation, the benchmark and the loading of the parameters defined in the 
+    config_file.json file. 
+    """
+    _loop_functions = {}        # description of the loop functions
+    _data_logger_exe = ""       # execution path of the data logger
 
-        elem = root.find('controllers')
-        if elem is not None:
-            root.remove(elem)
-        root.append(subroot)
+    def __init__(self, argos_file, execution_dir, results_dir = None, robots_num = None, loop_function = None) -> None:
+        self.robots_num = robots_num
+        self.base_argos_file = get_absolute_path(argos_file)                    # absolute path the argos file used in the experiment
+        self.execution_dir = get_absolute_path(execution_dir)                   
+        self.current_argos_file = f"{self.execution_dir}/experiment.argos"      # absolute path the argos file used by the optimisers
+        self.benchmar_res_file = f"{self.execution_dir}/data.csv"
+        self.results_dir = get_absolute_path(results_dir)
+        self.runner_list = []                                                   # list of runners
+        self.benchmark_results = {}
+        self.id_dict = {}                                                       # dictionary of the runners' ids with the number of apparitions 
+        self.load_config()
+        self.add_loop_function(loop_function)
+    
+    def load_config(self):
+        """Loads the config_file.json file"""
+        if (len(self._loop_functions) == 0):
+            p = Path(__file__).with_name("config_file.json")
+
+            with p.open("r") as config:
+                data = json.load(config)
+            
+            data = get_absolute_paths_relative_to_file(data)
+
+            SwarmRunner._loop_functions = data["loop_functions"]
+            SwarmRunner._data_logger_exe = data["exe_paths"]["data_logger_exe"]
         
-        if entities_nbr is not None:
-            self.set_number_of_entities(root, entities_nbr)
+        BaseRunner.load_config(data)
+    
+    def add_loop_function(self, loop_function):
+         if loop_function is not None:
+            try:
+                self.loop_function = self._loop_functions[loop_function]
+            except KeyError:
+                print(f"Loop function {loop_function} was not found in the config file")
+                raise
+    
+    def add_runner(self,description):
+        # makes sure that each runner has a unique id
+        id = description.setdefault("id", str(description["runner"]))
+        self.id_dict.setdefault(id, 0)
+        if self.id_dict[id] != 0:
+            description["id"] += str(self.id_dict[id])
+        self.id_dict[id] += 1
+            
+        self.runner_list.append(create_runner(description, self.current_argos_file))
+    
+    def run_optimisation(self):
+        for runner in self.runner_list:
 
-        with open(self.argos_file, 'wb') as f:
+            self.clear_exe_folder()
+            self.build_argos_file(runner, self.robots_num)
+            
+            runner.run_optimisation()
+
+            if self.results_dir is not None:
+                runner.save_optimisation_results(self.results_dir)
+
+    def clear_exe_folder(self):
+        files = glob.glob(f'{self.execution_dir}/*')
+        for f in files:
+            os.remove(f)
+    
+    def benchmark(self, metrics, runs=1):
+
+        run_number_pattern = re.compile(r"(?<=Run : )\d+")      # pattern used to keep track of the run number so that a progress 
+                                                                # bar can be displayed
+        metrics = list(set(metrics))
+
+        print(f'\n\n {"-"*30} Benchmark {"-"*30}\n\n')
+
+        print(f"Metrics being collected : {metrics} \n")
+
+        for runner in self.runner_list:
+            self.build_argos_file(runner, self.robots_num, metrics)
+            cmd = f"{SwarmRunner._data_logger_exe} -n -c {self.current_argos_file} -r {runs} -f data.csv --metrics"
+            for metric in metrics:
+                cmd += " " + metric 
+
+            for output in execute(cmd, self.execution_dir):
+                run_num = run_number_pattern.findall(output)
+                if (len(run_num) != 0):
+                    show(f'Benchmarking {runner.description["id"]} ', int(run_num[0]) + 1, runs)
+            self.pars_results(runner)
+
+        self.save_results()
+        return self.benchmark_results
+    
+    def save_results(self):
+        if self.results_dir is None:
+            return
+        if not os.path.exists(self.results_dir):
+            os.makedirs(self.results_dir)
+        with open(f"{self.results_dir}/benchamrk_results.pkl", "wb") as output_file:
+            pickle.dump(self.benchmark_results, output_file)
+    
+    def pars_results(self, runner):
+        SRDataParser.parse_results(self.benchmar_res_file, runner.description["id"], self.benchmark_results)
+    
+    def build_argos_file(self, runner, entities_nbr = None, metrics = None):
+        base = ET.parse(self.base_argos_file)
+        root = base.getroot()
+
+        runner.add_controller(root, metrics is not None)    # if metrics are not none it means the .argos file should be build for a benchmark
+        self.set_number_of_entities(root, entities_nbr)
+        self.set_loop_function(root)
+
+        with open(self.current_argos_file, 'wb') as f:
             base.write(f, xml_declaration=True)
     
     def set_number_of_entities(self, experiment, entities):
+        if entities is None:
+            return
         if isinstance(entities, int):
             entities = [entities]
         
         variables = experiment.findall("arena/distribute/entity")
         for i, robots in enumerate(variables):
-            robots.set('quantity', str(entities[i]))
-
-class Runner:
-    exe_paths = {
-        "AUTOMODE_EXEC": "automode_main",
-        "ARGOS_EXEC":"argos3",
-        "IRACE_EXEC": "irace",
-        "NEAT_OPTIMIZATION_EXEC": "/home/maciej/SwarmRunner/argos3-NEAT/bin/NEAT-evolution",
-        "NEAT_EXEC": "/home/maciej/SwarmRunner/argos3-NEAT/bin/NEAT-launch"
-    }
-
-    metric_patterns = {
-        "score": re.compile(r"(?<=Score = ).+"),
-        "seed": re.compile(r"(?<=seed = ).+")
-    }
+            robots.set("quantity", str(entities[i]))
     
-    metric_type = {
-        "score": float,
-        "seed": int
-    }
+    def set_loop_function(self, experiment):
+        if len(self.loop_function) == 0:
+            return
+        loop_func = experiment.findall("loop_functions")[0]
+        loop_func.set("library", self.loop_function["lib"])
+        loop_func.set("label", self.loop_function["label"])
 
-    def load_config(self) -> dict:
-        p = Path(__file__).with_name("config_file.ini")
-
-        parser = configparser.ConfigParser()
-
-        with p.open("r") as config:
-            parser.read_file(config)
-        return dict(parser["General"])
+def get_absolute_paths_relative_to_file(files):
+    """
+    Recursively searches through the varible files until the value is a string. In this case the value 
+    is assumed to be a path if it contains a "/" character. If so, the path is replace by the absolute path 
+    relative to the location of this file. 
+    """
+    path = os.path.abspath(os.path.dirname(__file__))
+    for keys in files:
+        if isinstance(files[keys], dict):
+            files[keys] = get_absolute_paths_relative_to_file(files[keys])
+            continue
+        if "/" not in files[keys]:
+            continue
+        if os.path.isabs(files[keys]):
+            continue
+        files[keys] = os.path.join(path, files[keys])
+    return files
     
-    def __init__(self) -> None:
-        self.results = {}
-        self.description = {
-            "options" : "",
-            "wd" : "./"
-        }
-        self.argos_file = ""
-
-    def run_optimization(self, argos_file:str) -> None:
-        pass
-
-    def run_benchmark(self, metrics, runs):
-        pass
-
-    def _run_benchmark(self, cmd, wd, metrics, runs):
-        for key in metrics:
-            self.results[key] = []
-
-        for _ in range(runs):
-            for output in self.execute(cmd, wd):
-                for key in metrics:
-                    res = self.metric_patterns[key].findall(output)
-                    if res:
-                        self.results[key] += res
-        for key in self.results:
-            self.results[key] = list(map(self.metric_type[key], self.results[key]))
-
-    def get_benchmark_results(self) -> str:
-        return self.results
-    
-    def add_description(self,description):
-        self.description.update(description)
-    
-    def add_argos_file(self,argos_file):
-        self.argos_file = argos_file
-
-    def execute(self, cmd, wd = "./"):
-        popen = subprocess.Popen(cmd, stdout=subprocess.PIPE, universal_newlines=True, shell = True, cwd = wd)
-        for stdout_line in iter(popen.stdout.readline, ""):
-            yield stdout_line 
-        popen.stdout.close()
-        return_code = popen.wait()
-        if return_code:
-            raise subprocess.CalledProcessError(return_code, cmd)
-        
-
-
-class NoRunner(Runner):
-    def run_benchmark(self, metrics, runs):
-        cmd = f'{self.exe_paths["ARGOS_EXEC"]} -c {self.argos_file} -n'
-        wd = os.path.dirname(self.argos_file)
-
-        self._run_benchmark(cmd, wd, metrics, runs)
-
-
-class IraceRunner(Runner):
-    def __init__(self) -> None:
-        self.optimized_pfsms = []
-        super().__init__()
-
-    def run_optimization(self, argos_file):
-        if "options" in self.description:
-            options = f'{self.description["options"]}'
-        if "wd" in self.description:
-            wd = self.description["wd"]
-        cmd = f'{self.exe_paths["IRACE_EXEC"]} {options}'
-
-        result_pattern = re.compile(r"\d*\s*(--nstates.*)")
-        
-        for output in self.execute(cmd, wd):
-            res = result_pattern.findall(output)
-            if res:
-                self.optimized_pfsms += res
-            print(output, end="")
-    
-    def run_benchmark(self, metrics, runs):
-        cmd = f'{self.exe_paths["AUTOMODE_EXEC"]} -c {self.argos_file} -n --fsm-config {self.optimized_pfsms[0]}'
-        wd = self.description["wd"]
-
-        self._run_benchmark(cmd, wd, metrics, runs)
-
-class NEATRunner(Runner):
-    def run_optimization(self, argos_file):
-        if "options" in self.description:
-            options = f'{self.description["options"]}'
-        if "wd" in self.description:
-            wd = self.description["wd"]
-        cmd = f'{self.exe_paths["NEAT_OPTIMIZATION_EXEC"]} {self.argos_file} {self.description["parameters"]} {self.description["startGen"]} {options}'
-        
-        for output in self.execute(cmd, wd):
-            print(output, end="")
-    
-    def run_benchmark(self, metrics, runs):
-        wd = self.description["wd"]
-        champ_gen = f'{wd}/gen/gen_last_1_champ'
-        cmd = f'{self.exe_paths["NEAT_EXEC"]} -c {self.argos_file} -n -g {champ_gen}'
-        
-        self._run_benchmark(cmd, wd, metrics, runs)
-    
-
-def create_runner(description:dict, argos_file) -> Runner:
-    runner_types = {
-        None: NoRunner(),
-        "irace": IraceRunner(),
-        "neat": NEATRunner()
-    }
-    runner = runner_types[description["algorithm"]]
-    runner.add_description(description)
-    runner.add_argos_file(argos_file)
-    return runner
