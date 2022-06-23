@@ -1,5 +1,5 @@
 # SwarmRunner 
-======
+===
 
 The SwarmRunner package is a tool that aims at facilitating the testing of optimisation algorithms for swarm robots' controllers. It uses the ARGoS3 simulator and the E-puck robots. The supported optimisation algorithms are AutoMoDe-chocolate and ARGoS3-NEAT. 
 Moreover, the tool lets the user collect metrics for the optimised controllers.
